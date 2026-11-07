@@ -53,6 +53,7 @@ input[type=text]{background:var(--bg);color:var(--tx);border:1px solid var(--bd)
     <button id="playBtn" hidden>▶ تشغيل</button>
     <button id="reqBtn" class="sec" disabled>✋ اطلب إيقاف</button>
     <button id="fsBtn" class="sec">⛶</button>
+    <button id="copyBtn" class="sec">🔗 نسخ رابط الغرفة</button>
    </div>
    <div class="row">
     <span class="mut" id="tm">0:00</span>
@@ -69,6 +70,7 @@ input[type=text]{background:var(--bg);color:var(--tx);border:1px solid var(--bd)
    <div class="row"><input id="msg" type="text" maxlength="300" placeholder="اكتب رسالة..." style="flex:1"><button id="send">إرسال</button></div></div>
  </aside>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js" onerror="var s=document.createElement('script');s.src='https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js';document.head.appendChild(s)"></script>
 <script>
 const $=id=>document.getElementById(id);
 const v=$('v'),chat=$('chat');
@@ -89,6 +91,7 @@ $('fsBtn').onclick=()=>{const s=$('stage');(document.fullscreenElement?document.
 $('vol').oninput=e=>v.volume=+e.target.value;
 $('nick').onchange=()=>{try{localStorage.setItem('nick',$('nick').value)}catch(e){}setPres()};
 
+$('copyBtn').onclick=()=>{const u=location.href;(navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>sys('اتنسخ رابط الغرفة، ابعته لصحابك'),()=>prompt('انسخ الرابط:',u))};
 function push(){if(!isHost||!hasFile)return;emit('state',{playing:!v.paused,time:v.currentTime})}
 $('playBtn').onclick=()=>{if(!hasFile)return;v.play().catch(()=>{});setTimeout(push,50)};
 $('seek').onchange=e=>{v.currentTime=+e.target.value;push()};
@@ -134,24 +137,50 @@ function renderPeers(list){const p=$('ppl');p.textContent='';
 
 
 function makeRoom(){
- if(!location.hash)location.hash=Math.random().toString(36).slice(2,7);
- const rn=location.hash.slice(1),id=Math.random().toString(36).slice(2,10);
- const L={},pc=[],pres={};let peers=[];
- const q='?room='+encodeURIComponent(rn)+'&id='+id;
- const post=b=>fetch('/send'+q,{method:'POST',body:JSON.stringify(b)});
- const es=new EventSource('/events'+q);
- es.addEventListener('peers',e=>{const old=peers;
-  peers=JSON.parse(e.data).map(p=>({peer:p.id,kind:'viewer',isMe:p.id===id,sameTab:p.id===id,presence:p.presence||{}}));
-  const joined=peers.filter(p=>!old.some(o=>o.peer===p.peer));pc.forEach(f=>f({peers,joined,left:[],updated:[]}))});
- es.addEventListener('msg',e=>{const m=JSON.parse(e.data);
-  (L[m.topic]||[]).forEach(f=>f({topic:m.topic,data:m.data,peer:m.from,isMe:m.from===id,sameTab:m.from===id,kind:'viewer'}))});
- $('status').textContent='رابط الغرفة: '+location.href;
- return{emit:(t,d)=>post({topic:t,data:d}),on:(t,f)=>{(L[t]=L[t]||[]).push(f)},
-  presence:p=>{Object.assign(pres,p);return post({presence:pres})},peers:()=>peers,onPeers:f=>{pc.push(f)}};
+ if(typeof mqtt==='undefined')throw 0;
+ const rnd=n=>Array.from(crypto.getRandomValues(new Uint8Array(n)),x=>(x%36).toString(36)).join('');
+ if(!location.hash)location.hash=rnd(10);
+ const rn=location.hash.slice(1).replace(/[^\w-]/g,'').slice(0,40),id=rnd(8);
+ const base='wr-sahraneen/'+rn+'/',BR=['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt'];
+ const L={},pc=[],seen=new Set(),pm=new Map(),cl=[];let pres={},peers=[],sig='';
+ const pub=(sub,s,r)=>cl.forEach(c=>c.publish(base+sub,s,{retain:!!r}));
+ const myP=()=>JSON.stringify({p:pres});
+ function upd(){
+  const now=Date.now();if(pm.has(id))pm.get(id).seen=now;
+  pm.forEach((v,k)=>{if(now-v.seen>45000)pm.delete(k)});
+  const old=peers;
+  peers=[...pm].map(([k,v])=>({peer:k,kind:'viewer',isMe:k===id,sameTab:k===id,presence:v.p}));
+  const s=JSON.stringify(peers.map(p=>[p.peer,p.presence]));if(s===sig)return;sig=s;
+  const joined=peers.filter(p=>!old.some(o=>o.peer===p.peer));
+  pc.forEach(f=>f({peers,joined,left:[],updated:[]}));
+ }
+ function onMsg(topic,buf){
+  const sub=topic.slice(base.length),s=buf.toString();
+  if(sub.slice(0,2)==='p/'){const pid=sub.slice(2);
+   if(!s)pm.delete(pid);else try{const o=(JSON.parse(s).p)||{};
+    pm.set(pid,{seen:Date.now(),p:{name:String(o.name||'').slice(0,20),host:!!o.host,file:!!o.file}})}catch(e){}
+   upd();return}
+  try{const m=JSON.parse(s);if(m.mid){if(seen.has(m.mid))return;seen.add(m.mid)}
+   (L[sub]||[]).forEach(f=>f({topic:sub,data:m.d,peer:m.from,isMe:m.from===id,sameTab:m.from===id,kind:'viewer'}))}catch(e){}
+ }
+ BR.forEach(u=>{const c=mqtt.connect(u,{clientId:'wr_'+id+'_'+rnd(4),keepalive:30,reconnectPeriod:3000,connectTimeout:8000,
+   will:{topic:base+'p/'+id,payload:'',retain:true,qos:0}});
+  cl.push(c);c.on('connect',()=>{c.subscribe(base+'#');c.publish(base+'p/'+id,myP(),{retain:true})});
+  c.on('message',onMsg);c.on('error',()=>{})});
+ const up=()=>cl.filter(c=>c.connected).length;
+ setInterval(()=>{if(pm.has(id))pub('p/'+id,myP(),true);upd();
+  const el=$('status');if(!up())el.textContent='⚠️ بيحاول يتصل بالوسيط... لو طوّل اتأكد من النت.';
+  else if(el.textContent.charAt(0)==='⚠')renderPeers(peers)},5000);
+ addEventListener('pagehide',()=>cl.forEach(c=>c.publish(base+'p/'+id,'',{retain:true})));
+ return{emit:(t,d)=>{pub(t,JSON.stringify({mid:rnd(8),from:id,d}));return Promise.resolve()},
+  on:(t,f)=>{(L[t]=L[t]||[]).push(f)},
+  presence:p=>{Object.assign(pres,p);pm.set(id,{seen:Date.now(),p:Object.assign({},pres)});pub('p/'+id,myP(),true);upd();return Promise.resolve()},
+  peers:()=>peers,onPeers:f=>{pc.push(f)}};
 }
 (async()=>{
+  for(let i=0;i<40&&typeof mqtt==='undefined';i++)await new Promise(r=>setTimeout(r,200));
   try{room=makeRoom()}catch(e){room=null}
-  if(!room){$('status').textContent='مش قادر يتصل بالسيرفر.';$('send').disabled=true;return}
+  if(!room){$('status').textContent='مش قادر يحمّل مكتبة الاتصال. اعمل Refresh أو اتأكد من النت.';$('send').disabled=true;return}
   setPres();
   room.on('chat',m=>{if(m.data&&typeof m.data.t==='string')addMsg(String(m.data.n||'ضيف').slice(0,20),m.data.t.slice(0,300))});
   room.on('state',m=>{const h=room.peers().find(p=>p.peer===m.peer);if(h&&h.presence.host&&!m.isMe&&m.data)applyState(m.data)});
