@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>غرفة المشاهدة</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f5f3ef;--card:#fff;--tx:#1d1b19;--mut:#6f6a63;--ac:#c2410c;--bd:#e3ded6;--ok:#15803d;--no:#b91c1c}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141211;--card:#1f1c1a;--tx:#f1ede7;--mut:#a39d94;--ac:#fb923c;--bd:#34302c;--ok:#4ade80;--no:#f87171}}
+:root[data-theme="dark"]{--bg:#141211;--card:#1f1c1a;--tx:#f1ede7;--mut:#a39d94;--ac:#fb923c;--bd:#34302c;--ok:#4ade80;--no:#f87171}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:Tahoma,"Segoe UI",system-ui,sans-serif;line-height:1.5}
+.wrap{max-width:1100px;margin:0 auto;padding:14px;display:grid;gap:14px;grid-template-columns:1fr 330px}
+@media(max-width:820px){.wrap{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px}
+h1{font-size:18px;margin:0 0 2px}
+.mut{color:var(--mut);font-size:13px}
+#stage{background:#000;border-radius:10px;aspect-ratio:16/9;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
+video{width:100%;height:100%;background:#000}
+#ph{position:absolute;color:#bbb;text-align:center;padding:20px;font-size:15px}
+button,input{font:inherit}
+button{background:var(--ac);color:#fff;border:0;border-radius:9px;padding:8px 13px;cursor:pointer}
+button.sec{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+button:disabled{opacity:.45;cursor:default}
+input[type=text]{background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:9px;padding:8px 10px;width:100%}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.row input[type=range]{flex:1;min-width:90px}
+#side{display:flex;flex-direction:column;gap:10px;min-height:0}
+#chat{height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:4px}
+.m{background:var(--bg);border-radius:9px;padding:6px 9px;font-size:14px;word-break:break-word}
+.m b{color:var(--ac)} .m.sys{color:var(--mut);font-size:12.5px;background:none}
+#votes{display:flex;flex-direction:column;gap:8px}
+.vc{border:1px solid var(--ac);border-radius:10px;padding:9px;font-size:14px}
+.vc .bt{display:flex;gap:6px;margin-top:6px;align-items:center}
+.vc.done{border-color:var(--bd);color:var(--mut)}
+.ok{color:var(--ok)} .no{color:var(--no)}
+#ppl span{display:inline-block;background:var(--bg);border-radius:20px;padding:2px 10px;margin:2px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+ <main>
+  <div class="card">
+   <h1>🎬 غرفة المشاهدة</h1>
+   <div class="mut" id="status">بتتصل بالغرفة...</div>
+   <div id="stage"><div id="ph">اختار ملف الفيلم من جهازك علشان يظهر هنا.<br>لازم كل الأعضاء يختاروا نفس الملف.</div>
+    <video id="v" playsinline></video></div>
+   <div class="row">
+    <label class="sec" style="border:1px solid var(--bd);border-radius:9px;padding:8px 13px;cursor:pointer">📁 اختار الفيلم<input id="file" type="file" accept="video/*" hidden></label>
+    <button id="hostBtn" class="sec">🎛️ أنا اللي هشغّل</button>
+    <button id="playBtn" hidden>▶ تشغيل</button>
+    <button id="reqBtn" class="sec" disabled>✋ اطلب إيقاف</button>
+    <button id="fsBtn" class="sec">⛶</button>
+   </div>
+   <div class="row">
+    <span class="mut" id="tm">0:00</span>
+    <input id="seek" type="range" min="0" max="0" step="1" value="0" disabled>
+    <span class="mut">🔊</span><input id="vol" type="range" min="0" max="1" step="0.05" value="1" style="max-width:90px">
+   </div>
+  </div>
+ </main>
+ <aside id="side">
+  <div class="card"><input id="nick" type="text" maxlength="20" placeholder="اسمك">
+   <div id="ppl" style="margin-top:8px"></div></div>
+  <div class="card"><b style="font-size:14px">طلبات الإيقاف</b><div id="votes"><div class="mut" id="nov">مفيش طلبات دلوقتي.</div></div></div>
+  <div class="card"><div id="chat"></div>
+   <div class="row"><input id="msg" type="text" maxlength="300" placeholder="اكتب رسالة..." style="flex:1"><button id="send">إرسال</button></div></div>
+ </aside>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const v=$('v'),chat=$('chat');
+let room=null,isHost=false,hasFile=false;
+const reqs={};
+const fmt=s=>{s=Math.max(0,s|0);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+try{$('nick').value=localStorage.getItem('nick')||''}catch(e){}
+const myName=()=>$('nick').value.trim()||'ضيف';
+
+function sys(t){const d=document.createElement('div');d.className='m sys';d.textContent=t;chat.appendChild(d);chat.scrollTop=chat.scrollHeight}
+function addMsg(n,t){const d=document.createElement('div');d.className='m';const b=document.createElement('b');b.textContent=n+': ';d.appendChild(b);d.appendChild(document.createTextNode(t));chat.appendChild(d);chat.scrollTop=chat.scrollHeight}
+const emit=(t,d)=>room&&room.emit(t,d).catch(()=>{});
+const setPres=()=>room&&room.presence({name:myName(),host:isHost,file:hasFile}).catch(()=>{});
+
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;v.src=URL.createObjectURL(f);hasFile=true;$('ph').hidden=true;$('reqBtn').disabled=!room;setPres();sys('اخترت الفيلم: '+f.name)};
+$('hostBtn').onclick=()=>{isHost=!isHost;$('hostBtn').textContent=isHost?'🎛️ إنت المشغّل':'🎛️ أنا اللي هشغّل';$('playBtn').hidden=!isHost;$('seek').disabled=!isHost;setPres();if(isHost){sys('إنت دلوقتي اللي بتشغّل الفيلم للكل');push()}};
+$('fsBtn').onclick=()=>{const s=$('stage');(document.fullscreenElement?document.exitFullscreen():s.requestFullscreen&&s.requestFullscreen()).catch(()=>{})};
+$('vol').oninput=e=>v.volume=+e.target.value;
+$('nick').onchange=()=>{try{localStorage.setItem('nick',$('nick').value)}catch(e){}setPres()};
+
+function push(){if(!isHost||!hasFile)return;emit('state',{playing:!v.paused,time:v.currentTime})}
+$('playBtn').onclick=()=>{if(!hasFile)return;v.play().catch(()=>{});setTimeout(push,50)};
+$('seek').onchange=e=>{v.currentTime=+e.target.value;push()};
+v.onloadedmetadata=()=>{$('seek').max=Math.floor(v.duration)};
+v.ontimeupdate=()=>{$('tm').textContent=fmt(v.currentTime)+' / '+fmt(v.duration||0);if(isHost)$('seek').value=Math.floor(v.currentTime)};
+setInterval(push,4000);
+
+function applyState(d){
+  if(!hasFile||isHost)return;
+  if(Math.abs(v.currentTime-d.time)>1.5)v.currentTime=d.time;
+  if(d.playing&&v.paused)v.play().catch(()=>sys('المتصفح منع التشغيل التلقائي، دوس على الفيديو مرة'));
+  if(!d.playing&&!v.paused)v.pause();
+}
+
+// ---- pause requests ----
+$('reqBtn').onclick=()=>{if(!hasFile)return;if(v.paused){emit('resume',{});sys('طلبت تكملة الفيلم');return}
+  emit('pausereq',{id:Date.now().toString(36)+Math.random().toString(36).slice(2,5),name:myName()})};
+function total(){return Math.max(1,room.peers().filter(p=>p.kind==='viewer').length)}
+function renderReq(id){
+  const r=reqs[id];let el=document.getElementById('r'+id);
+  if(!el){el=document.createElement('div');el.id='r'+id;$('votes').prepend(el);$('nov').hidden=true}
+  el.className='vc'+(r.done?' done':'');el.textContent='';
+  const t=document.createElement('div');t.textContent=r.name+' عايز يوقّف الفيلم لحظة';el.appendChild(t);
+  const b=document.createElement('div');b.className='bt';
+  const s=document.createElement('span');s.textContent='👍 '+r.yes.size+'  👎 '+r.no.size;
+  if(r.done){const o=document.createElement('b');o.className=r.result?'ok':'no';o.textContent=r.result?'✔ اتوافق عليه':'✘ ما اتوافقش';b.append(s,o)}
+  else{const me=room.peers().find(p=>p.sameTab);const voted=me&&(r.yes.has(me.peer)||r.no.has(me.peer));
+    const y=document.createElement('button'),n=document.createElement('button');
+    y.textContent='موافق';n.textContent='لأ';n.className='sec';y.disabled=n.disabled=!!voted;
+    y.onclick=()=>emit('vote',{id,yes:true});n.onclick=()=>emit('vote',{id,yes:false});b.append(y,n,s)}
+  el.appendChild(b);
+}
+function check(id){const r=reqs[id];if(!r||r.done)return;const tt=total();
+  if(r.yes.size*2>tt){r.done=true;r.result=true;v.pause();if(isHost)setTimeout(push,50);sys('الإيقاف اتوافق عليه')}
+  else if(r.no.size*2>=tt){r.done=true;r.result=false}
+  renderReq(id)}
+
+// ---- peers ----
+function renderPeers(list){const p=$('ppl');p.textContent='';
+  list.filter(x=>x.kind==='viewer').forEach(x=>{const s=document.createElement('span');
+    s.textContent=(x.presence.name||'ضيف')+(x.isMe&&x.sameTab?' (إنت)':'')+(x.presence.host?' 🎛️':'')+(x.presence.file?' ✅':'');p.appendChild(s)});
+  $('status').textContent='في الغرفة '+list.filter(x=>x.kind==='viewer').length+' — 🎛️ المشغّل · ✅ جاهز بالفيلم'}
+
+
+function makeRoom(){
+ if(!location.hash)location.hash=Math.random().toString(36).slice(2,7);
+ const rn=location.hash.slice(1),id=Math.random().toString(36).slice(2,10);
+ const L={},pc=[],pres={};let peers=[];
+ const q='?room='+encodeURIComponent(rn)+'&id='+id;
+ const post=b=>fetch('/send'+q,{method:'POST',body:JSON.stringify(b)});
+ const es=new EventSource('/events'+q);
+ es.addEventListener('peers',e=>{const old=peers;
+  peers=JSON.parse(e.data).map(p=>({peer:p.id,kind:'viewer',isMe:p.id===id,sameTab:p.id===id,presence:p.presence||{}}));
+  const joined=peers.filter(p=>!old.some(o=>o.peer===p.peer));pc.forEach(f=>f({peers,joined,left:[],updated:[]}))});
+ es.addEventListener('msg',e=>{const m=JSON.parse(e.data);
+  (L[m.topic]||[]).forEach(f=>f({topic:m.topic,data:m.data,peer:m.from,isMe:m.from===id,sameTab:m.from===id,kind:'viewer'}))});
+ $('status').textContent='رابط الغرفة: '+location.href;
+ return{emit:(t,d)=>post({topic:t,data:d}),on:(t,f)=>{(L[t]=L[t]||[]).push(f)},
+  presence:p=>{Object.assign(pres,p);return post({presence:pres})},peers:()=>peers,onPeers:f=>{pc.push(f)}};
+}
+(async()=>{
+  try{room=makeRoom()}catch(e){room=null}
+  if(!room){$('status').textContent='مش قادر يتصل بالسيرفر.';$('send').disabled=true;return}
+  setPres();
+  room.on('chat',m=>{if(m.data&&typeof m.data.t==='string')addMsg(String(m.data.n||'ضيف').slice(0,20),m.data.t.slice(0,300))});
+  room.on('state',m=>{const h=room.peers().find(p=>p.peer===m.peer);if(h&&h.presence.host&&!m.isMe&&m.data)applyState(m.data)});
+  room.on('resume',()=>{if(isHost&&hasFile){v.play().catch(()=>{});setTimeout(push,50)}});
+  room.on('pausereq',m=>{const d=m.data||{};if(!d.id||reqs[d.id])return;
+    reqs[d.id]={name:String(d.name||'ضيف').slice(0,20),yes:new Set([m.peer]),no:new Set(),done:false};
+    renderReq(d.id);check(d.id);setTimeout(()=>{const r=reqs[d.id];if(r&&!r.done){r.done=true;r.result=false;renderReq(d.id)}},30000)});
+  room.on('vote',m=>{const d=m.data||{},r=reqs[d.id];if(!r||r.done)return;
+    r.yes.delete(m.peer);r.no.delete(m.peer);(d.yes?r.yes:r.no).add(m.peer);renderReq(d.id);check(d.id)});
+  room.onPeers(c=>{renderPeers(c.peers);if(hasFile)$('reqBtn').disabled=false;
+    c.joined.forEach(p=>{if(!p.isMe)sys((p.presence.name||'حد')+' دخل الغرفة')});
+    if(c.joined.length&&isHost)push()});
+  $('send').onclick=()=>{const t=$('msg').value.trim();if(!t)return;emit('chat',{n:myName(),t});$('msg').value=''};
+  $('msg').onkeydown=e=>{if(e.key==='Enter')$('send').click()};
+})();
+</script>
+</body>
+</html>
